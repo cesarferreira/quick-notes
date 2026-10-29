@@ -15,6 +15,7 @@ public enum Markdown {
     private static let task = try! NSRegularExpression(pattern: #"^([ \t]*)(?:[-*+] )?\[([ xX])\] "#)
     private static let heading = try! NSRegularExpression(pattern: #"^(#{1,6}) "#)
     private static let list = try! NSRegularExpression(pattern: #"^([ \t]*)([-*+]|[0-9]+\.) "#)
+    private static let previewCode = try! NSRegularExpression(pattern: #"`([^`\n]+)`"#)
 
     public static func lines(_ source: String) -> [MarkdownLine] {
         let text = source as NSString
@@ -98,5 +99,38 @@ public enum Markdown {
             }
         }
         return "Untitled note"
+    }
+
+    public static func plainPreview(_ source: String) -> String {
+        let text = source as NSString
+        var skippedTitle = false
+        var parts: [String] = []
+        for line in lines(source) {
+            var value = text.substring(with: line.bodyRange).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty else { continue }
+            if !skippedTitle { skippedTitle = true; continue }
+            if value.hasPrefix("```") || value.hasPrefix("~~~") { continue }
+            if !line.isCode {
+                value = value.replacingOccurrences(of: #"^(?:[-*+]|\d+\.)\s+"#, with: "", options: .regularExpression)
+                let original = value as NSString
+                let code = previewCode.matches(in: value, range: NSRange(location: 0, length: original.length))
+                var marker = "\u{E000}"
+                while value.contains(marker) { marker += "\u{E000}" }
+                // Protect code spans while removing surrounding Markdown emphasis.
+                for (index, match) in code.enumerated().reversed() {
+                    value = (value as NSString).replacingCharacters(in: match.range, with: "\(marker)\(index)\(marker)")
+                }
+                value = value.replacingOccurrences(of: #"!?\[([^\]]+)\]\([^)]+\)"#, with: "$1", options: .regularExpression)
+                for pattern in [#"\*\*(.+?)\*\*"#, #"__(.+?)__"#, #"(?<!\*)\*([^*]+)\*(?!\*)"#,
+                                #"(?<!\w)_([^_]+)_(?!\w)"#, #"~~(.+?)~~"#] {
+                    value = value.replacingOccurrences(of: pattern, with: "$1", options: .regularExpression)
+                }
+                for (index, match) in code.enumerated() {
+                    value = value.replacingOccurrences(of: "\(marker)\(index)\(marker)", with: original.substring(with: match.range(at: 1)))
+                }
+            }
+            parts.append(value.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression))
+        }
+        return parts.joined(separator: " · ")
     }
 }

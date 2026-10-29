@@ -2,6 +2,25 @@ import XCTest
 @testable import QuickNotesCore
 
 final class NoteStoreTests: XCTestCase {
+    func testPreviewRemovesMarkdownAndTaskMarkersWithoutChangingTheNote() {
+        let source = "# Ideas\n**Small notes. Big ideas.**\n[ ] Catch inspiration\n  - [x] Ship **today**"
+        let note = Note(body: source)
+        XCTAssertEqual(note.preview, "Small notes. Big ideas. · Catch inspiration · Ship today")
+        XCTAssertEqual(note.body, source)
+    }
+
+    func testPreviewSkipsTheFirstNonemptyTitleAndKeepsReadableLinksAndCode() {
+        let source = "\n# Notes\nUse `swift test` and [the docs](https://example.com).\n```swift\napi_client.fetch()\n```"
+        XCTAssertEqual(Note(body: source).preview, "Use swift test and the docs. · api_client.fetch()")
+        XCTAssertEqual(Note(body: "# Title only").preview, "")
+    }
+
+    func testPreviewPreservesLiteralFormattingInsideInlineCode() {
+        let note = Note(body: "# Notes\nKeep `**/cache/**` and `a * b * c` literal, with **bold** outside.")
+        XCTAssertEqual(note.preview, "Keep **/cache/** and a * b * c literal, with bold outside.")
+        XCTAssertEqual(Note(body: "# Notes\n**Use `api_client` today**").preview, "Use api_client today")
+    }
+
     var directory: URL!
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

@@ -25,17 +25,22 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
     private let counter = label("0 characters", size: 12, weight: .medium, color: .white.withAlphaComponent(0.30))
     private let saveStatus = label("", size: 10, color: .tertiaryLabelColor)
     private let notice = label("", size: 11, color: .systemOrange)
+    private let footerStack = NSStackView()
+    private let taskProgress: TaskProgressView
     private let editorScroll = NotesScrollView()
     private let historyView = NSView()
     let search = NSSearchField()
     let table = HistoryTable()
-    private let emptyHistory = label("No notes yet. Create your first one with ⌘N.", size: 13, color: .secondaryLabelColor)
+    private let emptyHistory = HistoryEmptyView()
+    private let historyHint = label("↵ Open note", size: 10, color: .white.withAlphaComponent(0.30))
     private var pinButton: IconButton!
     private var historyButton: IconButton!
+    private var formatButton: IconButton!
 
     init(store: NoteStore, motion: NoteMotion = NoteMotion()) throws {
         self.store = store
         self.motion = motion
+        taskProgress = TaskProgressView(motion: motion)
         editor.motion = motion
         notes = try store.load()
         if let id = UserDefaults.standard.string(forKey: "lastNote"), let note = notes.first(where: { $0.id == id }) {
@@ -138,7 +143,16 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         content.addSubview(editorScroll)
         notice.maximumNumberOfLines = 2
         notice.lineBreakMode = .byWordWrapping
-        content.addSubview(notice)
+        notice.isHidden = true
+        taskProgress.isHidden = true
+        footerStack.translatesAutoresizingMaskIntoConstraints = false
+        footerStack.orientation = .vertical
+        footerStack.alignment = .leading
+        footerStack.spacing = 8
+        footerStack.detachesHiddenViews = true
+        footerStack.addArrangedSubview(notice)
+        footerStack.addArrangedSubview(taskProgress)
+        content.addSubview(footerStack)
         counter.alignment = .center
         content.addSubview(counter)
         content.addSubview(saveStatus)
@@ -146,7 +160,10 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         updatePinButton()
         content.addSubview(pinButton)
         let format = IconButton(symbol: "textformat", label: "Formatting and options", target: self, action: #selector(showFormat), motion: motion)
+        formatButton = format
         content.addSubview(format)
+        historyHint.isHidden = true
+        content.addSubview(historyHint)
         buildHistory()
         NSLayoutConstraint.activate([
             drag.topAnchor.constraint(equalTo: content.topAnchor), drag.leadingAnchor.constraint(equalTo: content.leadingAnchor),
@@ -159,14 +176,19 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
             editorScroll.topAnchor.constraint(equalTo: content.topAnchor, constant: 52),
             editorScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 17),
             editorScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -17),
-            editorScroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -58),
-            notice.leadingAnchor.constraint(equalTo: editorScroll.leadingAnchor, constant: 6), notice.trailingAnchor.constraint(equalTo: editorScroll.trailingAnchor),
-            notice.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -40),
+            editorScroll.bottomAnchor.constraint(equalTo: footerStack.topAnchor, constant: -12),
+            footerStack.leadingAnchor.constraint(equalTo: editorScroll.leadingAnchor, constant: 6),
+            footerStack.trailingAnchor.constraint(equalTo: editorScroll.trailingAnchor, constant: -6),
+            footerStack.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -46),
+            notice.widthAnchor.constraint(equalTo: footerStack.widthAnchor),
+            taskProgress.widthAnchor.constraint(equalTo: footerStack.widthAnchor),
             counter.centerXAnchor.constraint(equalTo: content.centerXAnchor), counter.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18),
             pinButton.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16), pinButton.centerYAnchor.constraint(equalTo: counter.centerYAnchor),
             saveStatus.leadingAnchor.constraint(equalTo: pinButton.trailingAnchor, constant: 3), saveStatus.centerYAnchor.constraint(equalTo: counter.centerYAnchor),
             saveStatus.widthAnchor.constraint(lessThanOrEqualToConstant: 70),
-            format.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16), format.centerYAnchor.constraint(equalTo: counter.centerYAnchor)
+            format.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16), format.centerYAnchor.constraint(equalTo: counter.centerYAnchor),
+            historyHint.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
+            historyHint.centerYAnchor.constraint(equalTo: counter.centerYAnchor)
         ])
     }
 
@@ -174,14 +196,34 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         historyView.translatesAutoresizingMaskIntoConstraints = false
         historyView.isHidden = true
         content.addSubview(historyView)
+        let searchContainer = NSView()
+        searchContainer.translatesAutoresizingMaskIntoConstraints = false
+        searchContainer.wantsLayer = true
+        searchContainer.layer?.cornerRadius = 11
+        searchContainer.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.045).cgColor
+        searchContainer.layer?.borderWidth = 0.5
+        searchContainer.layer?.borderColor = NSColor.white.withAlphaComponent(0.09).cgColor
+        historyView.addSubview(searchContainer)
+        let searchIcon = NSImageView(image: NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)!)
+        searchIcon.contentTintColor = .white.withAlphaComponent(0.40)
+        searchIcon.translatesAutoresizingMaskIntoConstraints = false
+        searchIcon.setAccessibilityElement(false)
+        searchContainer.addSubview(searchIcon)
         search.translatesAutoresizingMaskIntoConstraints = false
-        search.placeholderString = "Search your notes…"
         search.font = .systemFont(ofSize: 13)
+        search.textColor = .white.withAlphaComponent(0.9)
+        search.placeholderAttributedString = NSAttributedString(string: "Find a note…", attributes: [
+            .foregroundColor: NSColor.white.withAlphaComponent(0.32), .font: NSFont.systemFont(ofSize: 13)
+        ])
+        search.isBordered = false
+        search.isBezeled = false
+        search.drawsBackground = false
+        (search.cell as? NSSearchFieldCell)?.searchButtonCell = nil
         search.focusRingType = .none
         search.delegate = self
         search.sendsSearchStringImmediately = true
         search.setAccessibilityLabel("Search notes")
-        historyView.addSubview(search)
+        searchContainer.addSubview(search)
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.drawsBackground = false
@@ -190,8 +232,9 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("notes"))
         table.addTableColumn(column)
         table.headerView = nil
-        table.rowHeight = 65
+        table.rowHeight = 62
         table.intercellSpacing = NSSize(width: 0, height: 3)
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.backgroundColor = .clear
         table.style = .plain
         table.dataSource = self
@@ -204,17 +247,25 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         scroll.documentView = table
         historyView.addSubview(scroll)
         historyView.addSubview(emptyHistory)
-        emptyHistory.alignment = .center
         NSLayoutConstraint.activate([
-            historyView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
-            historyView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
-            historyView.topAnchor.constraint(equalTo: content.topAnchor, constant: 58),
-            historyView.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -50),
-            search.topAnchor.constraint(equalTo: historyView.topAnchor), search.leadingAnchor.constraint(equalTo: historyView.leadingAnchor),
-            search.trailingAnchor.constraint(equalTo: historyView.trailingAnchor), search.heightAnchor.constraint(equalToConstant: 28),
-            scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 12), scroll.leadingAnchor.constraint(equalTo: historyView.leadingAnchor),
+            historyView.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
+            historyView.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
+            historyView.topAnchor.constraint(equalTo: content.topAnchor, constant: 54),
+            historyView.bottomAnchor.constraint(equalTo: footerStack.topAnchor, constant: -12),
+            searchContainer.topAnchor.constraint(equalTo: historyView.topAnchor),
+            searchContainer.leadingAnchor.constraint(equalTo: historyView.leadingAnchor),
+            searchContainer.trailingAnchor.constraint(equalTo: historyView.trailingAnchor),
+            searchContainer.heightAnchor.constraint(equalToConstant: 34),
+            searchIcon.leadingAnchor.constraint(equalTo: searchContainer.leadingAnchor, constant: 12),
+            searchIcon.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor),
+            searchIcon.widthAnchor.constraint(equalToConstant: 14), searchIcon.heightAnchor.constraint(equalToConstant: 14),
+            search.leadingAnchor.constraint(equalTo: searchIcon.trailingAnchor, constant: 8),
+            search.trailingAnchor.constraint(equalTo: searchContainer.trailingAnchor, constant: -8),
+            search.centerYAnchor.constraint(equalTo: searchContainer.centerYAnchor), search.heightAnchor.constraint(equalToConstant: 26),
+            scroll.topAnchor.constraint(equalTo: searchContainer.bottomAnchor, constant: 10), scroll.leadingAnchor.constraint(equalTo: historyView.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: historyView.trailingAnchor), scroll.bottomAnchor.constraint(equalTo: historyView.bottomAnchor),
-            emptyHistory.centerXAnchor.constraint(equalTo: historyView.centerXAnchor), emptyHistory.centerYAnchor.constraint(equalTo: scroll.centerYAnchor)
+            emptyHistory.centerXAnchor.constraint(equalTo: historyView.centerXAnchor), emptyHistory.centerYAnchor.constraint(equalTo: scroll.centerYAnchor),
+            emptyHistory.widthAnchor.constraint(equalTo: historyView.widthAnchor), emptyHistory.heightAnchor.constraint(equalToConstant: 100)
         ])
     }
 
@@ -295,16 +346,26 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         editor.setSelectedRange(NSRange(location: (current.body as NSString).length, length: 0))
         editor.scrollToBeginningOfDocument(nil)
         dirty = false
-        notice.stringValue = ""
+        setNotice("")
         updateLabels()
     }
 
-    private func updateLabels() {
+    private func setNotice(_ message: String) {
+        notice.stringValue = message
+        notice.isHidden = message.isEmpty
+    }
+
+    private func updateLabels(animatedProgress: Bool = false) {
         titleLabel.stringValue = historyOpen ? "Your notes" : current.title
         panel.title = historyOpen ? "Quick Notes — History" : current.title
         counter.stringValue = historyOpen ? "\(visibleNotes.count) \(visibleNotes.count == 1 ? "note" : "notes")" : "\(current.body.count) characters"
         saveStatus.stringValue = dirty ? "Saving…" : (persistedBody == nil ? "" : "Saved")
         saveStatus.textColor = .tertiaryLabelColor
+        saveStatus.isHidden = historyOpen
+        formatButton.isHidden = historyOpen
+        historyHint.isHidden = !historyOpen || visibleNotes.isEmpty
+        taskProgress.update(source: current.body, animated: animatedProgress)
+        taskProgress.isHidden = historyOpen || taskProgress.total == 0
     }
 
     func textDidChange(_ notification: Notification) {
@@ -312,7 +373,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         editor.restyle()
         current.body = editor.string
         dirty = true
-        updateLabels()
+        updateLabels(animatedProgress: true)
         saveTimer?.invalidate()
         saveTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in _ = self?.save() }
     }
@@ -331,7 +392,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
                 }
                 if swipeDraft?.id == current.id { swipeDraft = nil }
                 current = copy
-                notice.stringValue = NoteStoreError.conflict.localizedDescription
+                setNotice(NoteStoreError.conflict.localizedDescription)
             }
             persistedBody = current.body
             current.modified = Date()
@@ -340,7 +401,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
             updateLabels()
             return true
         } catch {
-            notice.stringValue = "Couldn’t save: \(error.localizedDescription)"
+            setNotice("Couldn’t save: \(error.localizedDescription)")
             saveStatus.stringValue = "Unsaved"
             saveStatus.textColor = .systemOrange
             return false
@@ -358,7 +419,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
                 loadEditor()
             }
             if historyOpen { filterHistory() }
-        } catch { notice.stringValue = error.localizedDescription }
+        } catch { setNotice(error.localizedDescription) }
     }
 
     @discardableResult func navigateHistory(_ direction: NoteHistoryDirection) -> Bool {
@@ -387,7 +448,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
                 }
                 destination += step
             }
-        } catch { notice.stringValue = error.localizedDescription }
+        } catch { setNotice(error.localizedDescription) }
         return false
     }
 
@@ -416,10 +477,10 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         historyOpen.toggle()
         historyView.isHidden = !historyOpen
         editorScroll.isHidden = historyOpen
-        historyButton.contentTintColor = historyOpen ? .controlAccentColor : .secondaryLabelColor
+        historyButton.contentTintColor = historyOpen ? .white.withAlphaComponent(0.85) : .secondaryLabelColor
         if historyOpen {
             resetSwipeHistory()
-            do { notes = try store.load() } catch { notice.stringValue = error.localizedDescription }
+            do { notes = try store.load() } catch { setNotice(error.localizedDescription) }
             search.stringValue = ""
             filterHistory()
             panel.makeFirstResponder(search)
@@ -431,7 +492,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         visibleNotes = store.search(notes, query: search.stringValue)
         table.reloadData()
         emptyHistory.isHidden = !visibleNotes.isEmpty
-        emptyHistory.stringValue = notes.isEmpty ? "No notes yet. Create your first one with ⌘N." : "No matching notes."
+        emptyHistory.configure(hasNotes: !notes.isEmpty)
         if !visibleNotes.isEmpty { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         updateLabels()
     }
@@ -443,24 +504,11 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         return false
     }
     func numberOfRows(in tableView: NSTableView) -> Int { visibleNotes.count }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { HistoryNoteRow() }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard visibleNotes.indices.contains(row) else { return nil }
-        let note = visibleNotes[row]
-        let cell = NSTableCellView()
-        let title = label(note.title, size: 13, weight: .semibold)
-        let preview = label(note.preview.isEmpty ? "Empty note" : note.preview, size: 11, color: .secondaryLabelColor)
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        let date = label(formatter.localizedString(for: note.modified, relativeTo: Date()), size: 10, color: .tertiaryLabelColor)
-        cell.addSubview(title); cell.addSubview(preview); cell.addSubview(date)
-        NSLayoutConstraint.activate([
-            title.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 10), title.topAnchor.constraint(equalTo: cell.topAnchor, constant: 9),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: date.leadingAnchor, constant: -12),
-            date.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10), date.centerYAnchor.constraint(equalTo: title.centerYAnchor),
-            preview.leadingAnchor.constraint(equalTo: title.leadingAnchor), preview.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 5),
-            preview.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -10)
-        ])
-        date.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let cell = tableView.makeView(withIdentifier: NSUserInterfaceItemIdentifier("HistoryNoteCell"), owner: self) as? HistoryNoteCell ?? HistoryNoteCell()
+        cell.configure(note: visibleNotes[row])
         return cell
     }
 
@@ -515,7 +563,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
             current = Note()
             persistedBody = nil
             loadEditor()
-        } catch { notice.stringValue = error.localizedDescription }
+        } catch { setNotice(error.localizedDescription) }
     }
 
     @objc func showFormat(_ sender: NSButton) {

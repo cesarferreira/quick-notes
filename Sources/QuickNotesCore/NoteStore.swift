@@ -10,10 +10,7 @@ public struct Note: Equatable, Identifiable {
         self.modified = modified
     }
     public var title: String { Markdown.plainTitle(body) }
-    public var preview: String {
-        body.components(separatedBy: .newlines).dropFirst().joined(separator: " ")
-            .trimmingCharacters(in: .whitespaces)
-    }
+    public var preview: String { Markdown.plainPreview(body) }
 }
 
 public enum NoteStoreError: LocalizedError {

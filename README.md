@@ -83,6 +83,10 @@ Both task syntaxes become clickable checkboxes after the trailing space:
 - Press **Command+Shift+M** to see and edit the original Markdown.
 - The **T** button opens formatting, text size, copy, and file options.
 
+Notes with tasks show a completed count, percentage, and progress bar above the
+footer. Progress updates as you edit or check tasks. Nested tasks count
+individually; checkbox examples inside fenced code blocks are ignored.
+
 This is a small Markdown notepad: tables, embedded images, HTML, and a full
 CommonMark renderer are outside this version’s scope. Text always stays editable.
 
