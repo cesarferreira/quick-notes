@@ -6,12 +6,16 @@ final class MarkdownTextView: NSTextView {
     var fontSize: CGFloat = 14 { didSet { restyle() } }
     var onDismiss: (() -> Void)?
     var onToggleSource: (() -> Void)?
+    var motion = NoteMotion()
     private var styledLines: [MarkdownLine] = []
     private var formatting = false
+    private var checkboxOverlay: CALayer?
+    private var animatedCheckboxLocation: Int?
 
     override var acceptsFirstResponder: Bool { true }
 
     func configure() {
+        wantsLayer = true
         isRichText = false
         importsGraphics = false
         allowsUndo = true
@@ -36,6 +40,7 @@ final class MarkdownTextView: NSTextView {
 
     func restyle() {
         guard !formatting, let storage = textStorage else { return }
+        cancelCheckboxAnimation()
         formatting = true
         defer { formatting = false }
         let bodyFont = sourceMode ? NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular) : NSFont.systemFont(ofSize: fontSize, weight: .medium)
@@ -141,6 +146,7 @@ final class MarkdownTextView: NSTextView {
         }
         guard !sourceMode else { return }
         for line in styledLines where line.checkRange != nil {
+            if line.range.location == animatedCheckboxLocation { continue }
             guard let rect = checkboxRect(line), rect.intersects(dirtyRect) else { continue }
             let box = NSBezierPath(roundedRect: rect, xRadius: 3.5, yRadius: 3.5)
             if line.checked {
@@ -167,13 +173,82 @@ final class MarkdownTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if !sourceMode, let line = styledLines.first(where: { $0.checkRange != nil && checkboxRect($0)?.insetBy(dx: -5, dy: -5).contains(point) == true }),
-           let check = line.checkRange {
-            let selection = selectedRange()
-            replace(check, with: line.checked ? " " : "x")
-            setSelectedRange(selection)
+           line.checkRange != nil {
+            toggleTask(line)
             return
         }
         super.mouseDown(with: event)
+    }
+
+    private func toggleTask(_ line: MarkdownLine) {
+        guard let check = line.checkRange else { return }
+        let selection = selectedRange()
+        replace(check, with: line.checked ? " " : "x")
+        setSelectedRange(selection)
+        animateCheckbox(line, checked: !line.checked)
+    }
+
+    private func cancelCheckboxAnimation() {
+        checkboxOverlay?.removeFromSuperlayer()
+        checkboxOverlay = nil
+        animatedCheckboxLocation = nil
+    }
+
+    private func animateCheckbox(_ line: MarkdownLine, checked: Bool) {
+        guard !sourceMode, motion.isEnabled, let layer, let rect = checkboxRect(line) else { return }
+        let overlay = CALayer()
+        overlay.frame = rect
+        let box = CAShapeLayer()
+        box.frame = overlay.bounds
+        box.path = CGPath(roundedRect: overlay.bounds, cornerWidth: 3.5, cornerHeight: 3.5, transform: nil)
+        let accent = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
+        box.fillColor = checked ? accent : NSColor.labelColor.withAlphaComponent(0.06).cgColor
+        box.strokeColor = checked ? nil : NSColor.labelColor.withAlphaComponent(0.42).cgColor
+        box.lineWidth = 0.8
+        overlay.addSublayer(box)
+        let tick = CAShapeLayer()
+        tick.frame = overlay.bounds
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: 3, y: 6.5))
+        path.addLine(to: CGPoint(x: 5.5, y: 9))
+        path.addLine(to: CGPoint(x: 10, y: 4))
+        tick.path = path
+        tick.fillColor = nil
+        tick.strokeColor = NSColor.white.cgColor
+        tick.lineWidth = 1.5
+        tick.lineCap = .round
+        tick.lineJoin = .round
+        tick.strokeEnd = checked ? 1 : 0
+        overlay.addSublayer(tick)
+        checkboxOverlay = overlay
+        animatedCheckboxLocation = line.range.location
+        layer.addSublayer(overlay)
+        let stroke = CABasicAnimation(keyPath: "strokeEnd")
+        stroke.fromValue = checked ? 0 : 1
+        stroke.toValue = checked ? 1 : 0
+        stroke.duration = 0.16
+        stroke.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        tick.add(stroke, forKey: "tick")
+        let bounce = CAKeyframeAnimation(keyPath: "transform.scale")
+        bounce.values = [0.82, 1.12, 1]
+        bounce.keyTimes = [0, 0.6, 1]
+        bounce.duration = 0.22
+        overlay.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        overlay.position = CGPoint(x: rect.midX, y: rect.midY)
+        overlay.add(bounce, forKey: "checkBounce")
+        if !checked {
+            let fill = CABasicAnimation(keyPath: "fillColor")
+            fill.fromValue = accent
+            fill.toValue = box.fillColor
+            fill.duration = 0.16
+            box.add(fill, forKey: "uncheck")
+        }
+        needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) { [weak self] in
+            guard let self, self.checkboxOverlay === overlay else { return }
+            self.cancelCheckboxAnimation()
+            self.needsDisplay = true
+        }
     }
 
     func replace(_ range: NSRange, with replacement: String) {
@@ -235,10 +310,8 @@ final class MarkdownTextView: NSTextView {
     func insertTask() {
         let text = string as NSString
         let range = text.lineRange(for: NSRange(location: selectedRange().location, length: 0))
-        if let line = Markdown.lines(string).first(where: { $0.range.location == range.location }), let check = line.checkRange {
-            let selection = selectedRange()
-            replace(check, with: line.checked ? " " : "x")
-            setSelectedRange(selection)
+        if let line = Markdown.lines(string).first(where: { $0.range.location == range.location }), line.checkRange != nil {
+            toggleTask(line)
         } else {
             replace(NSRange(location: range.location, length: 0), with: "[ ] ")
         }

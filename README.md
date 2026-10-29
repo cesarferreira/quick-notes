@@ -5,7 +5,7 @@ floating glass feel as Quick Ask, and a live Markdown editor inspired by Raycast
 Notes.
 
 <p align="center">
-  <img alt="Quick Notes panel showing a checklist with nested tasks" src="screenshot.png" width="617">
+  <img alt="Quick Notes demo: swiping between notes, checking tasks, and browsing history" src="demo.gif" width="800">
 </p>
 
 Open it from the menu bar, or [bind a global key with kiwi](#toggle-it-with-a-hotkey-kiwi)
@@ -110,6 +110,10 @@ than a revision timeline for each note.
 The panel stays above other windows by default, so you can refer to a note while
 working in another app. Click the pin to switch to dismissing when focus leaves.
 Your pin preference is remembered between launches.
+The panel springs open and fades closed, swiping slides between notes, and history
+crossfades into place. Checkboxes draw their ticks with a small bounce, and toolbar
+buttons respond to hovering and pressing. Typing and saving stay immediate; the
+animations follow the macOS Reduce Motion preference.
 Drag the header to move it and the window edges to resize it. Its size and position
 are remembered. Escape always dismisses the editor. Quick Notes remains in the
 menu bar until you quit.

@@ -4,6 +4,7 @@ import QuickNotesCore
 final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSSearchFieldDelegate, NSTableViewDataSource, NSTableViewDelegate {
     let panel: NotesPanel
     let store: NoteStore
+    let motion: NoteMotion
     let editor = MarkdownTextView(frame: .zero)
     private(set) var current = Note()
     private var persistedBody: String?
@@ -17,6 +18,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
     private var pinned = UserDefaults.standard.object(forKey: "keepOnTop") as? Bool ?? true
     private var menuOpen = false
     private var dismissing = false
+    private var presentationGeneration = 0
     private var firstShow = true
     private let content = NoteSurface()
     private let titleLabel = label("Untitled note", size: 13, weight: .medium, color: .white.withAlphaComponent(0.35))
@@ -31,8 +33,10 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
     private var pinButton: IconButton!
     private var historyButton: IconButton!
 
-    init(store: NoteStore) throws {
+    init(store: NoteStore, motion: NoteMotion = NoteMotion()) throws {
         self.store = store
+        self.motion = motion
+        editor.motion = motion
         notes = try store.load()
         if let id = UserDefaults.standard.string(forKey: "lastNote"), let note = notes.first(where: { $0.id == id }) {
             current = note
@@ -103,13 +107,13 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         let drag = DragArea()
         drag.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(drag)
-        let close = IconButton(symbol: "xmark", label: "Hide · Esc", target: self, action: #selector(hide))
+        let close = IconButton(symbol: "xmark", label: "Hide · Esc", target: self, action: #selector(hide), motion: motion)
         close.contentTintColor = .tertiaryLabelColor
         content.addSubview(close)
         titleLabel.alignment = .center
         content.addSubview(titleLabel)
-        historyButton = IconButton(symbol: "clock.arrow.circlepath", label: "Note history · ⌘H", target: self, action: #selector(toggleHistory))
-        let new = IconButton(symbol: "plus", label: "New note · ⌘N", target: self, action: #selector(newNote))
+        historyButton = IconButton(symbol: "clock.arrow.circlepath", label: "Note history · ⌘H", target: self, action: #selector(toggleHistory), motion: motion)
+        let new = IconButton(symbol: "plus", label: "New note · ⌘N", target: self, action: #selector(newNote), motion: motion)
         let toolbar = NSStackView(views: [historyButton, new])
         toolbar.spacing = 2
         toolbar.orientation = .horizontal
@@ -138,10 +142,10 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         counter.alignment = .center
         content.addSubview(counter)
         content.addSubview(saveStatus)
-        pinButton = IconButton(symbol: "pin", label: "Keep on top", target: self, action: #selector(togglePin))
+        pinButton = IconButton(symbol: "pin", label: "Keep on top", target: self, action: #selector(togglePin), motion: motion)
         updatePinButton()
         content.addSubview(pinButton)
-        let format = IconButton(symbol: "textformat", label: "Formatting and options", target: self, action: #selector(showFormat))
+        let format = IconButton(symbol: "textformat", label: "Formatting and options", target: self, action: #selector(showFormat), motion: motion)
         content.addSubview(format)
         buildHistory()
         NSLayoutConstraint.activate([
@@ -220,30 +224,47 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
     }
 
     func revealPanel() {
+        let opening = !panel.isVisible || dismissing
+        if opening {
+            presentationGeneration += 1
+            dismissing = false
+        }
         if !panel.isVisible {
             refreshFromDisk()
             position()
+            panel.alphaValue = motion.isEnabled ? 0 : 1
         }
         focusEditor()
+        if opening { motion.reveal(panel) }
     }
 
     func focusEditor() {
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(historyOpen ? search : editor)
     }
-    func toggle() { panel.isVisible ? hide() : show() }
+    func toggle() { panel.isVisible && !dismissing ? hide() : show() }
 
     @objc func hide() {
-        guard dismissPanel() else { return }
-        if !NSApp.isHidden && NSApp.isActive && NSApp.keyWindow == nil { NSApp.hide(nil) }
+        _ = dismissPanel {
+            if !NSApp.isHidden && NSApp.isActive && NSApp.keyWindow == nil { NSApp.hide(nil) }
+        }
     }
 
-    @discardableResult func dismissPanel() -> Bool {
+    @discardableResult func dismissPanel(completion: (() -> Void)? = nil) -> Bool {
         guard !dismissing else { return true }
         guard save() else { return false }
+        guard panel.isVisible else { completion?(); return true }
         dismissing = true
-        defer { dismissing = false }
-        panel.orderOut(nil)
+        presentationGeneration += 1
+        let generation = presentationGeneration
+        panel.resignKey()
+        motion.dismiss(panel) { [weak self] in
+            guard let self, self.presentationGeneration == generation, self.dismissing else { return }
+            self.panel.orderOut(nil)
+            self.panel.alphaValue = 1
+            self.dismissing = false
+            completion?()
+        }
         return true
     }
 
@@ -356,6 +377,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
                 let id = order[destination]
                 let stored = saved.first(where: { $0.id == id })
                 if let note = stored ?? (swipeDraft?.id == id ? swipeDraft : nil) {
+                    motion.transition(in: editorScroll, direction: direction)
                     current = note
                     persistedBody = stored?.body
                     if stored != nil { UserDefaults.standard.set(note.id, forKey: "lastNote") }
@@ -376,6 +398,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
 
     @objc func newNote() {
         guard save() else { return }
+        motion.transition(in: content)
         resetSwipeHistory()
         current = Note()
         persistedBody = nil
@@ -389,6 +412,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
 
     @objc func toggleHistory() {
         guard save() else { return }
+        motion.transition(in: content)
         historyOpen.toggle()
         historyView.isHidden = !historyOpen
         editorScroll.isHidden = historyOpen
@@ -442,6 +466,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
 
     @objc func openSelectedNote() {
         guard visibleNotes.indices.contains(table.selectedRow), save() else { return }
+        motion.transition(in: content)
         resetSwipeHistory()
         current = visibleNotes[table.selectedRow]
         persistedBody = current.body

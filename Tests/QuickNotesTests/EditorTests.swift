@@ -9,7 +9,7 @@ final class EditorTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try NoteStore(directory: directory)
-        let controller = try NotesController(store: store)
+        let controller = try NotesController(store: store, motion: NoteMotion(reduceMotion: { true }))
         controller.panel.contentView?.layoutSubtreeIfNeeded()
         try body(controller, store)
         controller.panel.orderOut(nil)
@@ -196,7 +196,7 @@ final class EditorTests: XCTestCase {
                 controller.show()
                 controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: controller.panel))
                 XCTAssertFalse(controller.panel.isVisible)
-                let reopened = try NotesController(store: store)
+                let reopened = try NotesController(store: store, motion: NoteMotion(reduceMotion: { true }))
                 reopened.show()
                 reopened.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: reopened.panel))
                 XCTAssertFalse(reopened.panel.isVisible)
@@ -209,7 +209,7 @@ final class EditorTests: XCTestCase {
         try withPinPreference(false) {
             try withController { controller, store in
                 controller.togglePin()
-                let reopened = try NotesController(store: store)
+                let reopened = try NotesController(store: store, motion: NoteMotion(reduceMotion: { true }))
                 reopened.show()
                 reopened.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: reopened.panel))
                 XCTAssertTrue(reopened.panel.isVisible)

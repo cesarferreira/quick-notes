@@ -21,7 +21,7 @@ final class HistorySwipeTests: XCTestCase {
             try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: Double(300 - index * 100))], ofItemAtPath: store.url(for: note).path)
         }
         defaults.set(notes[0].id, forKey: "lastNote")
-        let controller = try NotesController(store: store)
+        let controller = try NotesController(store: store, motion: NoteMotion(reduceMotion: { true }))
         try body(controller, store, notes)
         controller.panel.orderOut(nil)
     }

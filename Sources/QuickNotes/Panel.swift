@@ -47,8 +47,16 @@ final class DragArea: NSView {
 }
 
 final class IconButton: NSButton {
-    init(symbol: String, label: String, target: AnyObject, action: Selector) {
+    private let motion: NoteMotion
+    private var hoverTracking: NSTrackingArea?
+    private var hovered = false
+    private var pressed = false
+
+    init(symbol: String, label: String, target: AnyObject, action: Selector, motion: NoteMotion = NoteMotion()) {
+        self.motion = motion
         super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 8
         self.target = target
         self.action = action
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
@@ -64,6 +72,31 @@ final class IconButton: NSButton {
         heightAnchor.constraint(equalToConstant: 28).isActive = true
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let tracking = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(tracking)
+        hoverTracking = tracking
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true; updateFeedback() }
+    override func mouseExited(with event: NSEvent) { hovered = false; updateFeedback() }
+    override func highlight(_ flag: Bool) {
+        super.highlight(flag)
+        pressed = flag
+        updateFeedback()
+    }
+    override func mouseDown(with event: NSEvent) {
+        highlight(true)
+        defer { highlight(false) }
+        super.mouseDown(with: event)
+    }
+    private func updateFeedback() {
+        guard let layer else { return }
+        motion.highlight(layer, hovered: hovered && isEnabled, pressed: pressed && isEnabled)
+    }
 }
 
 final class HistoryTable: NSTableView {
