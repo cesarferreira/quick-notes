@@ -4,6 +4,10 @@ A little space for your thoughts. A native macOS menu bar notepad with the same
 floating glass feel as Quick Ask, and a live Markdown editor inspired by Raycast
 Notes.
 
+<p align="center">
+  <img alt="Quick Notes panel showing a checklist with nested tasks" src="screenshot.png" width="617">
+</p>
+
 Open it from the menu bar, or [bind a global key with kiwi](#toggle-it-with-a-hotkey-kiwi)
 to open or dismiss it from any app. Write a thought,
 make a checklist, or find something in your note history. Everything saves on your
