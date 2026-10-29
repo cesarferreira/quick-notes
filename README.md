@@ -5,7 +5,7 @@ floating glass feel as Quick Ask, and a live Markdown editor inspired by Raycast
 Notes.
 
 <p align="center">
-  <img alt="Quick Notes demo: swiping between notes, checking tasks, and browsing history" src="demo.gif" width="800">
+  <img alt="Quick Notes demo: swiping between notes, tracking checklist progress, and browsing history" src="demo.gif" width="800">
 </p>
 
 Open it from the menu bar, or [bind a global key with kiwi](#toggle-it-with-a-hotkey-kiwi)
