@@ -16,7 +16,7 @@ Mac as plain Markdown. No account or network connection is needed.
 ## Build and run
 
 Requires macOS 14 or newer and Xcode command line tools with Swift 6. The panel
-uses native Liquid Glass on macOS 26 and newer, and vibrancy on older systems.
+uses dark native macOS vibrancy with a soft wallpaper tint and a subtle rounded border.
 The project uses Swift and AppKit with no external dependencies. Quick Ask’s
 Rust/GPUI project is kept separate; AppKit provides the editable native text view.
 
@@ -44,21 +44,21 @@ Install the app first (`make install`), then add a binding to
 
 ```toml
 [bindings]
-"hyper+q" = { app = "dev.cesar.quicknotes", behavior = "toggle" }
+"hyper+q" = { command = "'/Applications/Quick Notes.app/Contents/MacOS/quick-notes' --toggle" }
 
 # Or double-tap right Command.
-"double+right_command" = { app = "dev.cesar.quicknotes", behavior = "toggle" }
+"double+right_command" = { command = "'/Applications/Quick Notes.app/Contents/MacOS/quick-notes' --toggle" }
 ```
 
 `hyper` is the modifier you define in kiwi's `[hyper]` section (for example Caps
-Lock). Press the key once to launch Quick Notes or show its panel. Press it again
-while the panel is in front to hide it.
+Lock). Each press toggles the panel's visibility, including when it is pinned
+above another app. The command launches Quick Notes if it is not running, and
+otherwise sends the running app a toggle request without opening a second panel.
 
-- Use the bundle ID, not the name `Quick Notes`. kiwi's toggle looks up the
-  running process, and macOS lists it as `quick-notes`, so a name lookup never
-  finds it.
-- kiwi reloads the config automatically. The first time it hides the app, macOS
-  asks to let kiwi control System Events; allow it.
+Use this command binding instead of kiwi's generic `app` toggle: the notes panel
+can remain visible while another app is frontmost. kiwi reloads the config
+automatically. If you installed somewhere other than `/Applications`, adjust the
+command path to that location.
 
 ## Writing
 
@@ -94,6 +94,12 @@ text, with the most recently modified notes first. Search ignores case and
 accents. Click a result or press Return to open it; use Down to enter the results
 and the arrow keys to choose one. Escape returns to the editor.
 
+Swipe **left** inside a note to open the next older note, or **right** to return
+to a newer note. Each swipe moves one note in last-edited order; vertical scrolling
+still scrolls the current note. Edits save before switching. The browsing order
+stays fixed while you swipe, and stops at the oldest or newest note. Starting a
+new note or choosing one from the history list refreshes that order.
+
 Edits save automatically after a brief pause and before switching notes, closing
 the panel, or quitting. Blank new notes do not clutter history. The footer shows
 the character count and save status. If a save fails, the panel keeps your draft
@@ -101,7 +107,9 @@ and shows the error. If a file changed outside the app, your version saves as a
 separate note so both versions survive. This history is a list of notes, rather
 than a revision timeline for each note.
 
-The panel dismisses when you click another app. Click the pin to keep it visible.
+The panel stays above other windows by default, so you can refer to a note while
+working in another app. Click the pin to switch to dismissing when focus leaves.
+Your pin preference is remembered between launches.
 Drag the header to move it and the window edges to resize it. Its size and position
 are remembered. Escape always dismisses the editor. Quick Notes remains in the
 menu bar until you quit.

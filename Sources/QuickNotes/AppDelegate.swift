@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var controller: NotesController?
     private var statusItem: NSStatusItem?
     private var lockDescriptor: Int32 = -1
+    private var handledRequestIDs: [String] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -22,15 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             lockDescriptor = Darwin.open(directory.appendingPathComponent(".app.lock").path, O_CREAT | O_RDWR, 0o600)
             guard lockDescriptor >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
             guard flock(lockDescriptor, LOCK_EX | LOCK_NB) == 0 else {
-                DistributedNotificationCenter.default().postNotificationName(Notification.Name("dev.cesar.quicknotes.show"), object: nil, userInfo: nil, deliverImmediately: true)
+                AppRequest(arguments: CommandLine.arguments).send()
                 NSApp.terminate(nil)
                 return
             }
             controller = try NotesController(store: store)
             buildMainMenu()
             buildStatusMenu()
-            DistributedNotificationCenter.default().addObserver(self, selector: #selector(show),
-                name: Notification.Name("dev.cesar.quicknotes.show"), object: nil)
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(handleAppRequest(_:)),
+                name: AppRequest.show.notificationName, object: nil)
+            DistributedNotificationCenter.default().addObserver(self, selector: #selector(handleAppRequest(_:)),
+                name: AppRequest.toggle.notificationName, object: nil)
             controller?.show()
         } catch {
             let alert = NSAlert(error: error)
@@ -43,13 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         controller?.save() == false ? .terminateCancel : .terminateNow
     }
-    // The panel is the whole app, so activating it (for example from a key
-    // mapper's app toggle) shows the panel, and hiding the app dismisses it.
     func applicationDidBecomeActive(_ notification: Notification) {
-        controller?.show()
+        if !NSApp.isHidden { controller?.revealPanel() }
     }
     func applicationDidHide(_ notification: Notification) {
-        controller?.hide()
+        controller?.dismissPanel()
     }
     func applicationWillTerminate(_ notification: Notification) {
         if lockDescriptor >= 0 { Darwin.close(lockDescriptor) }
@@ -98,6 +99,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         menu.addItem(item)
+    }
+    @objc private func handleAppRequest(_ notification: Notification) {
+        let id = notification.userInfo?["requestID"] as? String
+        if id == nil || !handledRequestIDs.contains(id!) {
+            if let id {
+                handledRequestIDs.append(id)
+                if handledRequestIDs.count > 128 { handledRequestIDs.removeFirst() }
+            }
+            if notification.name == AppRequest.toggle.notificationName { controller?.toggle() }
+            else { controller?.show() }
+        }
+        if let id {
+            DistributedNotificationCenter.default().postNotificationName(AppRequest.acknowledgement,
+                object: id, userInfo: nil, deliverImmediately: true)
+        }
     }
     @objc func show() { controller?.show() }
     @objc func toggle() { controller?.toggle() }

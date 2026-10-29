@@ -116,6 +116,39 @@ final class EditorTests: XCTestCase {
         }
     }
 
+    func testGlassMaterialAndShadowMaskKeepCornersTransparentAfterResize() throws {
+        try withController { controller, _ in
+            let effect = try XCTUnwrap(controller.panel.contentView as? NSVisualEffectView)
+            for size in [NSSize(width: 400, height: 260), NSSize(width: 620, height: 440)] {
+                controller.panel.setContentSize(size)
+                effect.layoutSubtreeIfNeeded()
+                let mask = try XCTUnwrap(effect.maskImage,
+                    "Layer clipping alone leaves the native material and shadow rectangular")
+                let rendered = NSImage(size: size, flipped: false) { rect in
+                    mask.draw(in: rect)
+                    return true
+                }
+                let pixels = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(rendered.tiffRepresentation)))
+                let width = pixels.pixelsWide
+                let height = pixels.pixelsHigh
+                for (x, y) in [(1, 1), (width - 2, 1), (1, height - 2), (width - 2, height - 2)] {
+                    XCTAssertLessThan(try XCTUnwrap(pixels.colorAt(x: x, y: y)).alphaComponent, 0.01,
+                        "Material and shadow must not fill the rectangular corner at \(size)")
+                }
+                for (x, y) in [(width / 2, 1), (1, height / 2), (width - 2, height / 2), (width / 2, height - 2)] {
+                    XCTAssertGreaterThan(try XCTUnwrap(pixels.colorAt(x: x, y: y)).alphaComponent, 0.99,
+                        "Resizing must preserve the straight edges of the glass")
+                }
+                let insetX = Int(30 * CGFloat(width) / size.width)
+                let insetY = Int(30 * CGFloat(height) / size.height)
+                for (x, y) in [(insetX, insetY), (width - insetX, insetY), (insetX, height - insetY), (width - insetX, height - insetY)] {
+                    XCTAssertGreaterThan(try XCTUnwrap(pixels.colorAt(x: x, y: y)).alphaComponent, 0.99,
+                        "The corner radius must stay fixed instead of stretching with the window")
+                }
+            }
+        }
+    }
+
     func testClickingTheVisibleEditorCanReceiveKeyboardInput() throws {
         try withController { controller, _ in
             controller.show()
@@ -130,6 +163,144 @@ final class EditorTests: XCTestCase {
                 isARepeat: false, keyCode: 0))
             controller.panel.sendEvent(key)
             XCTAssertEqual(editor.string, "a")
+        }
+    }
+
+    private func withPinPreference(_ value: Bool?, _ body: () throws -> Void) throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "keepOnTop")
+        defer {
+            if let previous { defaults.set(previous, forKey: "keepOnTop") }
+            else { defaults.removeObject(forKey: "keepOnTop") }
+        }
+        if let value { defaults.set(value, forKey: "keepOnTop") }
+        else { defaults.removeObject(forKey: "keepOnTop") }
+        try body()
+    }
+
+    func testNotesStayVisibleAboveOtherWindowsByDefault() throws {
+        try withPinPreference(nil) {
+            try withController { controller, _ in
+                controller.show()
+                controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: controller.panel))
+                XCTAssertTrue(controller.panel.isVisible)
+                XCTAssertGreaterThan(controller.panel.level.rawValue, NSWindow.Level.normal.rawValue)
+            }
+        }
+    }
+
+    func testUnpinRestoresDismissOnBlurAndIsRemembered() throws {
+        try withPinPreference(nil) {
+            try withController { controller, store in
+                controller.togglePin()
+                controller.show()
+                controller.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: controller.panel))
+                XCTAssertFalse(controller.panel.isVisible)
+                let reopened = try NotesController(store: store)
+                reopened.show()
+                reopened.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: reopened.panel))
+                XCTAssertFalse(reopened.panel.isVisible)
+                reopened.panel.orderOut(nil)
+            }
+        }
+    }
+
+    func testPinningAgainIsRemembered() throws {
+        try withPinPreference(false) {
+            try withController { controller, store in
+                controller.togglePin()
+                let reopened = try NotesController(store: store)
+                reopened.show()
+                reopened.windowDidResignKey(Notification(name: NSWindow.didResignKeyNotification, object: reopened.panel))
+                XCTAssertTrue(reopened.panel.isVisible)
+                reopened.panel.orderOut(nil)
+            }
+        }
+    }
+
+    func testEmptyCheckboxKeepsAFullHeightCaret() throws {
+        try withController { controller, _ in
+            let editor = controller.editor
+            for character in "[ ] " {
+                editor.insertText(String(character), replacementRange: editor.selectedRange())
+            }
+            editor.layoutManager?.ensureLayout(for: editor.textContainer!)
+            let caret = editor.firstRect(forCharacterRange: editor.selectedRange(), actualRange: nil)
+            XCTAssertGreaterThanOrEqual(caret.height, editor.fontSize)
+            XCTAssertEqual(editor.string, "[ ] ")
+            editor.insertText("Next", replacementRange: editor.selectedRange())
+            XCTAssertEqual(editor.string, "[ ] Next")
+        }
+    }
+
+    func testReturnAndIndentKeepTheCaretVisibleOnAnEmptyTask() throws {
+        try withController { controller, store in
+            let editor = controller.editor
+            editor.insertText("[ ] Parent", replacementRange: NSRange(location: 0, length: 0))
+            editor.insertNewline(nil)
+            editor.layoutManager?.ensureLayout(for: editor.textContainer!)
+            XCTAssertGreaterThanOrEqual(editor.firstRect(forCharacterRange: editor.selectedRange(), actualRange: nil).height, editor.fontSize)
+            editor.insertTab(nil)
+            editor.layoutManager?.ensureLayout(for: editor.textContainer!)
+            XCTAssertGreaterThanOrEqual(editor.firstRect(forCharacterRange: editor.selectedRange(), actualRange: nil).height, editor.fontSize)
+            XCTAssertTrue(controller.save())
+            XCTAssertEqual(try store.load().first?.body, "[ ] Parent\n  [ ] ")
+        }
+    }
+
+    func testCaretMatchesTheTextLineHeightAtDifferentFontSizes() throws {
+        try withController { controller, _ in
+            let editor = controller.editor
+            for size: CGFloat in [12, 15, 22] {
+                editor.fontSize = size
+                editor.string = "[ ] Create release\n[ ] "
+                editor.restyle()
+                let layout = try XCTUnwrap(editor.layoutManager)
+                let bodyFont = NSFont.systemFont(ofSize: size, weight: .medium)
+                let expectedHeight = layout.defaultLineHeight(for: bodyFont)
+                for offset in [4, 10, (editor.string as NSString).length] {
+                    editor.setSelectedRange(NSRange(location: offset, length: 0))
+                    layout.ensureLayout(for: editor.textContainer!)
+                    let caret = editor.firstRect(forCharacterRange: editor.selectedRange(), actualRange: nil)
+                    XCTAssertEqual(caret.height, expectedHeight, accuracy: 0.5,
+                        "Caret must match the text line at font size \(size), offset \(offset)")
+                }
+            }
+        }
+    }
+
+    func testToggleHidesAVisiblePinnedNoteEvenWhenItIsNotKey() throws {
+        try withPinPreference(true) {
+            try withController { controller, _ in
+                controller.show()
+                controller.panel.resignKey()
+                XCTAssertTrue(controller.panel.isVisible)
+                XCTAssertFalse(controller.panel.isKeyWindow)
+                controller.toggle()
+                XCTAssertFalse(controller.panel.isVisible)
+                controller.toggle()
+                XCTAssertTrue(controller.panel.isVisible)
+                controller.toggle()
+                XCTAssertFalse(controller.panel.isVisible)
+            }
+        }
+    }
+
+    func testRevealingPanelTakesKeyboardFocusFromInactiveApplication() throws {
+        try withController { controller, _ in
+            let previousPolicy = NSApp.activationPolicy()
+            defer { NSApp.setActivationPolicy(previousPolicy) }
+            NSApp.setActivationPolicy(.accessory)
+            NSApp.deactivate()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            XCTAssertFalse(NSApp.isActive)
+
+            controller.revealPanel()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+
+            XCTAssertTrue(controller.panel.isKeyWindow,
+                "Revealing the panel from an inactive app must take keyboard focus without a click")
+            XCTAssertTrue(controller.panel.firstResponder === controller.editor)
         }
     }
 

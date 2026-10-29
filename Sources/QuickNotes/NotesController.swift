@@ -9,18 +9,21 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
     private var persistedBody: String?
     private var notes: [Note] = []
     private var visibleNotes: [Note] = []
+    private var swipeNoteIDs: [String]?
+    private var swipeDraft: Note?
     private var dirty = false
     private var saveTimer: Timer?
     private var historyOpen = false
-    private var pinned = false
+    private var pinned = UserDefaults.standard.object(forKey: "keepOnTop") as? Bool ?? true
     private var menuOpen = false
+    private var dismissing = false
     private var firstShow = true
-    private let content = NSView()
-    private let titleLabel = label("Untitled note", size: 13, weight: .medium, color: .secondaryLabelColor)
-    private let counter = label("0 characters", size: 11, color: .tertiaryLabelColor)
+    private let content = NoteSurface()
+    private let titleLabel = label("Untitled note", size: 13, weight: .medium, color: .white.withAlphaComponent(0.35))
+    private let counter = label("0 characters", size: 12, weight: .medium, color: .white.withAlphaComponent(0.30))
     private let saveStatus = label("", size: 10, color: .tertiaryLabelColor)
     private let notice = label("", size: 11, color: .systemOrange)
-    private let editorScroll = NSScrollView()
+    private let editorScroll = NotesScrollView()
     private let historyView = NSView()
     let search = NSSearchField()
     let table = HistoryTable()
@@ -39,7 +42,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
             persistedBody = note.body
         }
         panel = NotesPanel(contentRect: NSRect(x: 0, y: 0, width: 480, height: 310),
-            styleMask: [.borderless, .resizable], backing: .buffered, defer: false)
+            styleMask: [.borderless, .resizable, .nonactivatingPanel], backing: .buffered, defer: false)
         super.init()
         configureWindow()
         buildContent()
@@ -55,6 +58,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         panel.isReleasedWhenClosed = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
+        panel.appearance = NSAppearance(named: .darkAqua)
         panel.hasShadow = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.minSize = NSSize(width: 400, height: 260)
@@ -66,25 +70,22 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         content.layer?.cornerRadius = 26
         content.layer?.cornerCurve = .continuous
         content.layer?.masksToBounds = true
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView(frame: NSRect(origin: .zero, size: panel.frame.size))
-            glass.style = .regular
-            glass.cornerRadius = 26
-            glass.contentView = content
-            panel.contentView = glass
-        } else {
-            let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: panel.frame.size))
-            effect.material = .hudWindow
-            effect.blendingMode = .behindWindow
-            effect.state = .active
-            effect.wantsLayer = true
-            effect.layer?.cornerRadius = 26
-            effect.layer?.masksToBounds = true
-            content.frame = effect.bounds
-            content.autoresizingMask = [.width, .height]
-            effect.addSubview(content)
-            panel.contentView = effect
-        }
+        let effect = NSVisualEffectView(frame: NSRect(origin: .zero, size: panel.frame.size))
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.isEmphasized = true
+        effect.maskImage = roundedMaterialMask(radius: 26)
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 26
+        effect.layer?.cornerCurve = .continuous
+        effect.layer?.masksToBounds = true
+        effect.layer?.borderWidth = 0.5
+        effect.layer?.borderColor = NSColor.white.withAlphaComponent(0.16).cgColor
+        content.frame = effect.bounds
+        content.autoresizingMask = [.width, .height]
+        effect.addSubview(content)
+        panel.contentView = effect
         // The borderless window frame must share the glass silhouette; rounding
         // only its content leaves a rectangular compositor surface and shadow.
         if let frame = panel.contentView?.superview {
@@ -121,7 +122,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         content.addSubview(toolbar)
         editor.configure()
         editor.delegate = self
-        editor.fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize").nonzero ?? 15)
+        editor.fontSize = CGFloat(UserDefaults.standard.double(forKey: "fontSize").nonzero ?? 14)
         editor.onDismiss = { [weak self] in self?.hide() }
         editorScroll.translatesAutoresizingMaskIntoConstraints = false
         editorScroll.drawsBackground = false
@@ -129,6 +130,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         editorScroll.hasVerticalScroller = true
         editorScroll.scrollerStyle = .overlay
         editorScroll.documentView = editor
+        editorScroll.onNavigate = { [weak self] direction in _ = self?.navigateHistory(direction) }
         content.addSubview(editorScroll)
         notice.maximumNumberOfLines = 2
         notice.lineBreakMode = .byWordWrapping
@@ -137,6 +139,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         content.addSubview(counter)
         content.addSubview(saveStatus)
         pinButton = IconButton(symbol: "pin", label: "Keep on top", target: self, action: #selector(togglePin))
+        updatePinButton()
         content.addSubview(pinButton)
         let format = IconButton(symbol: "textformat", label: "Formatting and options", target: self, action: #selector(showFormat))
         content.addSubview(format)
@@ -150,8 +153,8 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
             titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: close.trailingAnchor, constant: 10),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: toolbar.leadingAnchor, constant: -10),
             editorScroll.topAnchor.constraint(equalTo: content.topAnchor, constant: 52),
-            editorScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 22),
-            editorScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -22),
+            editorScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 17),
+            editorScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -17),
             editorScroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -58),
             notice.leadingAnchor.constraint(equalTo: editorScroll.leadingAnchor, constant: 6), notice.trailingAnchor.constraint(equalTo: editorScroll.trailingAnchor),
             notice.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -40),
@@ -212,12 +215,15 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
     }
 
     func show() {
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
+        revealPanel()
+    }
+
+    func revealPanel() {
         if !panel.isVisible {
             refreshFromDisk()
             position()
         }
-        if NSApp.isHidden { NSApp.unhide(nil) }
-        NSApp.activate()
         focusEditor()
     }
 
@@ -225,18 +231,24 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(historyOpen ? search : editor)
     }
-    func toggle() { panel.isVisible && panel.isKeyWindow ? hide() : show() }
+    func toggle() { panel.isVisible ? hide() : show() }
 
     @objc func hide() {
-        guard save() else { return }
+        guard dismissPanel() else { return }
+        if !NSApp.isHidden && NSApp.isActive && NSApp.keyWindow == nil { NSApp.hide(nil) }
+    }
+
+    @discardableResult func dismissPanel() -> Bool {
+        guard !dismissing else { return true }
+        guard save() else { return false }
+        dismissing = true
+        defer { dismissing = false }
         panel.orderOut(nil)
-        // Hand focus back to the previous app, so a key mapper's toggle sees
-        // Quick Notes as backgrounded and shows it again on the next press.
-        if NSApp.isActive && NSApp.keyWindow == nil { NSApp.hide(nil) }
+        return true
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        if !pinned && !menuOpen { hide() }
+        if !pinned && !menuOpen && !dismissing { hide() }
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { hide(); return false }
 
@@ -291,8 +303,13 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         do {
             do { try store.save(current, expectedBody: persistedBody) }
             catch NoteStoreError.conflict {
-                current = Note(body: current.body)
-                try store.save(current, expectedBody: nil)
+                let copy = Note(body: current.body)
+                try store.save(copy, expectedBody: nil)
+                if let index = swipeNoteIDs?.firstIndex(of: current.id) {
+                    swipeNoteIDs?[index] = copy.id
+                }
+                if swipeDraft?.id == current.id { swipeDraft = nil }
+                current = copy
                 notice.stringValue = NoteStoreError.conflict.localizedDescription
             }
             persistedBody = current.body
@@ -313,6 +330,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         guard save() else { return }
         do {
             notes = try store.load()
+            resetSwipeHistory()
             if let note = notes.first(where: { $0.id == current.id }), note.body != current.body {
                 current = note
                 persistedBody = note.body
@@ -322,8 +340,43 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         } catch { notice.stringValue = error.localizedDescription }
     }
 
+    @discardableResult func navigateHistory(_ direction: NoteHistoryDirection) -> Bool {
+        guard !historyOpen else { return false }
+        guard save() else { return false }
+        do {
+            let saved = try store.load()
+            var order = swipeNoteIDs ?? saved.map(\.id)
+            if !order.contains(current.id) { order.insert(current.id, at: 0) }
+            if persistedBody == nil { swipeDraft = current }
+            swipeNoteIDs = order
+            guard let index = order.firstIndex(of: current.id) else { return false }
+            let step = direction == .older ? 1 : -1
+            var destination = index + step
+            while order.indices.contains(destination) {
+                let id = order[destination]
+                let stored = saved.first(where: { $0.id == id })
+                if let note = stored ?? (swipeDraft?.id == id ? swipeDraft : nil) {
+                    current = note
+                    persistedBody = stored?.body
+                    if stored != nil { UserDefaults.standard.set(note.id, forKey: "lastNote") }
+                    loadEditor()
+                    panel.makeFirstResponder(editor)
+                    return true
+                }
+                destination += step
+            }
+        } catch { notice.stringValue = error.localizedDescription }
+        return false
+    }
+
+    private func resetSwipeHistory() {
+        swipeNoteIDs = nil
+        swipeDraft = nil
+    }
+
     @objc func newNote() {
         guard save() else { return }
+        resetSwipeHistory()
         current = Note()
         persistedBody = nil
         historyOpen = false
@@ -341,6 +394,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         editorScroll.isHidden = historyOpen
         historyButton.contentTintColor = historyOpen ? .controlAccentColor : .secondaryLabelColor
         if historyOpen {
+            resetSwipeHistory()
             do { notes = try store.load() } catch { notice.stringValue = error.localizedDescription }
             search.stringValue = ""
             filterHistory()
@@ -388,6 +442,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
 
     @objc func openSelectedNote() {
         guard visibleNotes.indices.contains(table.selectedRow), save() else { return }
+        resetSwipeHistory()
         current = visibleNotes[table.selectedRow]
         persistedBody = current.body
         UserDefaults.standard.set(current.id, forKey: "lastNote")
@@ -401,9 +456,15 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
 
     @objc func togglePin() {
         pinned.toggle()
+        UserDefaults.standard.set(pinned, forKey: "keepOnTop")
+        updatePinButton()
+    }
+
+    private func updatePinButton() {
         pinButton.image = NSImage(systemSymbolName: pinned ? "pin.fill" : "pin", accessibilityDescription: "Keep on top")
         pinButton.contentTintColor = pinned ? .controlAccentColor : .secondaryLabelColor
         pinButton.toolTip = pinned ? "Unpin · dismiss when focus leaves" : "Keep on top"
+        pinButton.setAccessibilityValue(pinned ? "On" : "Off")
     }
     @objc func toggleSource() { editor.sourceMode.toggle(); panel.makeFirstResponder(editor) }
     @objc func revealNotes() { NSWorkspace.shared.open(store.directory) }
@@ -425,6 +486,7 @@ final class NotesController: NSObject, NSWindowDelegate, NSTextViewDelegate, NSS
         guard save(), persistedBody != nil else { return }
         do {
             try FileManager.default.trashItem(at: store.url(for: current), resultingItemURL: nil)
+            resetSwipeHistory()
             current = Note()
             persistedBody = nil
             loadEditor()

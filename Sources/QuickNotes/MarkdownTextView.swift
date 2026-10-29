@@ -3,7 +3,7 @@ import QuickNotesCore
 
 final class MarkdownTextView: NSTextView {
     var sourceMode = false { didSet { restyle() } }
-    var fontSize: CGFloat = 15 { didSet { restyle() } }
+    var fontSize: CGFloat = 14 { didSet { restyle() } }
     var onDismiss: (() -> Void)?
     var onToggleSource: (() -> Void)?
     private var styledLines: [MarkdownLine] = []
@@ -29,7 +29,7 @@ final class MarkdownTextView: NSTextView {
         textContainer?.widthTracksTextView = true
         textContainer?.lineFragmentPadding = 0
         textContainerInset = NSSize(width: 6, height: 12)
-        insertionPointColor = .labelColor
+        insertionPointColor = NSColor(calibratedWhite: 0.96, alpha: 1)
         setAccessibilityLabel("Note editor")
         setAccessibilityHelp("Write Markdown. Type open bracket, space, close bracket, space to create a checklist.")
     }
@@ -38,12 +38,15 @@ final class MarkdownTextView: NSTextView {
         guard !formatting, let storage = textStorage else { return }
         formatting = true
         defer { formatting = false }
+        let bodyFont = sourceMode ? NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular) : NSFont.systemFont(ofSize: fontSize, weight: .medium)
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 8
-        paragraph.paragraphSpacing = 2
+        paragraph.minimumLineHeight = layoutManager?.defaultLineHeight(for: bodyFont) ?? fontSize * 1.2
+        // Put spacing between paragraphs so the caret uses the text line height.
+        paragraph.lineSpacing = 0
+        paragraph.paragraphSpacing = 10
         let base: [NSAttributedString.Key: Any] = [
-            .font: sourceMode ? NSFont.monospacedSystemFont(ofSize: fontSize - 1, weight: .regular) : NSFont.systemFont(ofSize: fontSize, weight: .medium),
-            .foregroundColor: NSColor.labelColor,
+            .font: bodyFont,
+            .foregroundColor: NSColor(calibratedWhite: 0.96, alpha: 1),
             .paragraphStyle: paragraph
         ]
         let whole = NSRange(location: 0, length: storage.length)
